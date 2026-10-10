@@ -1774,7 +1774,8 @@ class Reader {
   handleBookmark = (remove) => {
     const cfi = remove ? this.#bookmarkInfo.cfi : this.view.lastLocation?.cfi
 
-    let content = this.view.lastLocation.range.startContainer.data ?? this.view.lastLocation.range.startContainer.innerText
+    const container = this.view.lastLocation?.range?.startContainer
+    let content = container?.data ?? container?.innerText ?? ''
     content = content.trim()
     if (content.length > 200) {
       content = content.slice(0, 200) + '...'

@@ -10,6 +10,7 @@ import 'package:anx_reader/l10n/generated/L10n.dart';
 import 'package:anx_reader/models/window_info.dart';
 import 'package:anx_reader/page/home_page.dart';
 import 'package:anx_reader/page/migration_page.dart';
+import 'package:anx_reader/providers/paper_collection.dart';
 import 'package:anx_reader/service/book_player/book_player_server.dart';
 import 'package:anx_reader/service/network/http_proxy_overrides.dart';
 import 'package:anx_reader/service/tts/tts_handler.dart';
@@ -59,7 +60,7 @@ Future<void> main() async {
 
   // If no migration needed, initialize paths normally
   if (!_needsMigration) {
-    initBasePath();
+    await initBasePath();
     AnxLog.init();
     AnxError.init();
     await DBHelper().initDB();
@@ -116,6 +117,24 @@ class _MyAppState extends ConsumerState<MyApp>
 
   @override
   Future<void> onWindowClose() async {
+    // Paper collection shutdown: stop the timer and new queue work, cancel
+    // network/AI streams, persist interrupted state and drain any import
+    // commit still writing. Shared resources (WebView, main DB) are only
+    // released after that drain succeeds — never concurrently with writes.
+    bool importsDrained = true;
+    try {
+      importsDrained = await ref
+          .read(paperCollectionProvider.notifier)
+          .shutdown()
+          .timeout(const Duration(seconds: 35), onTimeout: () => false);
+    } catch (e) {
+      importsDrained = false;
+    }
+    if (!importsDrained) {
+      AnxLog.warning(
+          'onWindowClose: an import is still writing; keeping shared resources');
+      return;
+    }
     await Server().stop();
     await webViewEnvironment?.dispose();
     webViewEnvironment = null;

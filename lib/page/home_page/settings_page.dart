@@ -5,6 +5,7 @@ import 'package:anx_reader/providers/iap.dart';
 import 'package:anx_reader/service/iap/iap_service.dart';
 import 'package:anx_reader/utils/env_var.dart';
 import 'package:anx_reader/widgets/settings/about.dart';
+import 'package:anx_reader/widgets/settings/paper_collection_settings.dart';
 import 'package:anx_reader/widgets/settings/theme_mode.dart';
 import 'package:anx_reader/widgets/settings/webdav_switch.dart';
 import 'package:flutter/material.dart';
@@ -61,6 +62,8 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                 padding: const EdgeInsets.symmetric(horizontal: 8),
                 child: webdavSwitch(context, setState, ref),
               ),
+              const Divider(),
+              const PaperCollectionSettings(),
               const Divider(),
               const MoreSettings(),
               if (EnvVar.enableInAppPurchase)

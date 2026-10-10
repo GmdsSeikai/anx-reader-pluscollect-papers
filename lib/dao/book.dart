@@ -76,6 +76,18 @@ class BookDao extends BaseDao {
     );
   }
 
+  /// All books sharing [md5], including soft-deleted ones. The main library
+  /// has no unique constraint on `file_md5`, so reconciliation must inspect
+  /// every match instead of trusting a single row.
+  Future<List<Book>> selectBooksByMd5(String md5) {
+    return queryList(
+      table,
+      mapper: Book.fromDb,
+      where: 'file_md5 = ?',
+      whereArgs: [md5],
+    );
+  }
+
   Future<List<Book>> searchBooks(String keyword) async {
     final query = keyword.trim();
     if (query.isEmpty) {

@@ -101,6 +101,7 @@ class DBHelper {
   static final DBHelper _instance = DBHelper._internal();
   static Database? _database;
   static bool updatedDB = false;
+  static bool inMaintenance = false;
 
   factory DBHelper() {
     return _instance;
@@ -109,6 +110,9 @@ class DBHelper {
   DBHelper._internal();
 
   Future<Database> get database async {
+    if (inMaintenance) {
+      throw StateError('Library storage is unavailable during maintenance');
+    }
     if (_database != null) return _database!;
     _database = await initDB();
     return _database!;
@@ -126,7 +130,7 @@ class DBHelper {
           path,
           version: dbVersion,
           onCreate: (db, version) async {
-            onUpgradeDatabase(db, 0, version);
+            await onUpgradeDatabase(db, 0, version);
           },
           onUpgrade: onUpgradeDatabase,
         );
@@ -145,7 +149,7 @@ class DBHelper {
           options: OpenDatabaseOptions(
             version: dbVersion,
             onCreate: (db, version) async {
-              onUpgradeDatabase(db, 0, version);
+              await onUpgradeDatabase(db, 0, version);
             },
             onUpgrade: onUpgradeDatabase,
           ),
@@ -156,6 +160,12 @@ class DBHelper {
   static Future<void> close() async {
     await _database?.close();
     _database = null;
+  }
+
+  static Future<Database> reopen() async {
+    await close();
+    _database = await DBHelper().initDB();
+    return _database!;
   }
 
   /// Checkpoint WAL to merge data into main database file

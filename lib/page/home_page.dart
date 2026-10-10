@@ -8,8 +8,10 @@ import 'package:anx_reader/page/home_page/ai_page.dart';
 import 'package:anx_reader/service/initialization_check.dart';
 import 'package:anx_reader/page/home_page/bookshelf_page.dart';
 import 'package:anx_reader/page/home_page/notes_page.dart';
+import 'package:anx_reader/page/home_page/papers_page.dart';
 import 'package:anx_reader/page/home_page/settings_page.dart';
 import 'package:anx_reader/page/home_page/statistics_page.dart';
+import 'package:anx_reader/providers/paper_collection.dart';
 import 'package:anx_reader/service/receive_file/receive_share.dart';
 import 'package:anx_reader/service/vibration_service.dart';
 import 'package:anx_reader/utils/check_update.dart';
@@ -117,6 +119,10 @@ class _HomePageState extends ConsumerState<HomePage> {
 
     if (AnxPlatform.isWindows) {
       await _checkWindowsWebview();
+      // The collection scheduler is owned by the app lifecycle, not the
+      // papers page: browsing only the bookshelf must not stop collection.
+      // start() is idempotent.
+      await ref.read(paperCollectionProvider.notifier).start();
     }
 
     if (AnxPlatform.isAndroid || AnxPlatform.isIOS || AnxPlatform.isOhos) {
@@ -136,6 +142,15 @@ class _HomePageState extends ConsumerState<HomePage> {
         'label': L10n.of(context).navBarBookshelf,
         'identifier': 'bookshelf'
       },
+      // Paper collection is Windows-first in v1: other platforms neither
+      // show the entry nor start the collection scheduler. Existing PDF
+      // reading stays available everywhere.
+      if (AnxPlatform.isWindows)
+        {
+          'icon': Icons.description_outlined,
+          'label': L10n.of(context).navBarPapers,
+          'identifier': 'papers'
+        },
       if (Prefs().bottomNavigatorShowStatistics)
         {
           'icon': Icons.show_chart,
@@ -175,6 +190,7 @@ class _HomePageState extends ConsumerState<HomePage> {
     ) {
       final page = [
         BookshelfPage(controller: controller),
+        if (AnxPlatform.isWindows) PapersPage(controller: controller),
         if (Prefs().bottomNavigatorShowStatistics)
           StatisticPage(controller: controller),
         if (Prefs().bottomNavigatorShowAI && EnvVar.enableAIFeature)

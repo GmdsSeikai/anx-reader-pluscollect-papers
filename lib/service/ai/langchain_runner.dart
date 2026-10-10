@@ -8,8 +8,14 @@ import 'package:langchain/langchain.dart';
 class CancelableLangchainRunner {
   static const String thinkTag = '<think/>';
   StreamSubscription<ChatResult>? _subscription;
+  void Function()? _cancelPlainStream;
 
   void cancel() {
+    final cancelStream = _cancelPlainStream;
+    if (cancelStream != null) {
+      cancelStream();
+      return;
+    }
     _subscription?.cancel();
     _subscription = null;
   }
@@ -24,8 +30,27 @@ class CancelableLangchainRunner {
     bool answerPhaseStarted = false;
 
     late StreamController<String> controller;
+    Future<void> stopSource() async {
+      final subscription = _subscription;
+      _subscription = null;
+      final cancelled = subscription?.cancel().catchError((Object _) {});
+      await _closeModel(model);
+      await cancelled;
+    }
+
+    void cancelStream() {
+      // Close the transport before awaiting its stream cancellation: an
+      // HTTP SSE iterator can otherwise wait forever for the next event.
+      stopSource();
+      if (!controller.isClosed) controller.close();
+      if (identical(_cancelPlainStream, cancelStream)) {
+        _cancelPlainStream = null;
+      }
+    }
+
     controller = StreamController<String>(
       onListen: () {
+        _cancelPlainStream = cancelStream;
         final source = model.stream(prompt);
         _subscription = source.listen(
           (event) {
@@ -82,14 +107,18 @@ class CancelableLangchainRunner {
               await controller.close();
             }
             _subscription = null;
+            if (identical(_cancelPlainStream, cancelStream)) {
+              _cancelPlainStream = null;
+            }
           },
           cancelOnError: false,
         );
       },
       onCancel: () async {
-        await _subscription?.cancel();
-        _subscription = null;
-        await _closeModel(model);
+        await stopSource();
+        if (identical(_cancelPlainStream, cancelStream)) {
+          _cancelPlainStream = null;
+        }
         if (!controller.isClosed) {
           await controller.close();
         }

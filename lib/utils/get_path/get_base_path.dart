@@ -7,6 +7,7 @@ import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
 
 String documentPath = '';
+int _permissionProbeSerial = 0;
 
 /// Check if a path is accessible (can read and write)
 Future<bool> _isPathAccessible(String path) async {
@@ -15,7 +16,8 @@ Future<bool> _isPathAccessible(String path) async {
     if (!dir.existsSync()) return false;
 
     // Try to create and delete a test file to verify write permission
-    final testFile = File('$path${Platform.pathSeparator}.anx_permission_test');
+    final testFile = File('$path${Platform.pathSeparator}.anx_permission_test-'
+        '$pid-${DateTime.now().microsecondsSinceEpoch}-${_permissionProbeSerial++}');
     await testFile.writeAsString('test');
     await testFile.delete();
     return true;
@@ -61,7 +63,7 @@ Future<Directory> getAnxDocumentDir() async {
   return Directory(await getAnxDocumentsPath());
 }
 
-void initBasePath() async {
+Future<void> initBasePath() async {
   Directory appDocDir = await getAnxDocumentDir();
   documentPath = appDocDir.path;
   debugPrint('documentPath: $documentPath');

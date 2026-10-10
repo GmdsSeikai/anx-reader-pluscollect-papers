@@ -2,11 +2,16 @@ import 'dart:io';
 import 'dart:math';
 
 import 'package:anx_reader/config/shared_preference_provider.dart';
+import 'package:anx_reader/dao/database.dart';
+import 'package:anx_reader/dao/papers/paper_database.dart';
 import 'package:anx_reader/l10n/generated/L10n.dart';
+import 'package:anx_reader/providers/paper_collection.dart';
 import 'package:anx_reader/providers/storage_info.dart';
+import 'package:anx_reader/service/db_operation_lock.dart';
 
 import 'package:anx_reader/utils/get_path/get_base_path.dart';
 import 'package:anx_reader/utils/get_path/storage_migration.dart';
+import 'package:anx_reader/utils/log/common.dart';
 import 'package:anx_reader/utils/platform_utils.dart';
 import 'package:anx_reader/widgets/common/anx_button.dart';
 import 'package:anx_reader/widgets/delete_confirm.dart';
@@ -16,6 +21,7 @@ import 'package:anx_reader/widgets/settings/settings_title.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:path/path.dart' as p;
 
 class StorageSettings extends ConsumerStatefulWidget {
   const StorageSettings({super.key});
@@ -108,19 +114,91 @@ class _StorageSettingsState extends ConsumerState<StorageSettings>
       _migrationCurrentItem = '';
     });
 
-    final success = await performStorageMigration(
-      sourcePath: _currentStoragePath!,
-      destinationPath: _selectedNewPath!,
-      onProgress: (currentItem, progress, total) {
-        if (mounted) {
-          setState(() {
-            _migrationCurrentItem = currentItem;
-            _migrationProgress = progress;
-            _migrationTotal = total;
-          });
-        }
-      },
-    );
+    // Storage migration moves the whole `databases` directory (including
+    // paper_collection.db). Order matters: stop new work, drain in-flight
+    // owned writes (collection/citation/AI/download/import saves), close
+    // BOTH databases under the migration lock, copy, switch the runtime
+    // path (prefs + cached documentPath), then reopen and verify. Reopening
+    // before switching would recreate an empty library at the old location
+    // the migration just deleted.
+    final controller = ref.read(paperCollectionProvider.notifier);
+    final wasPaused = ref.read(paperCollectionProvider).paused;
+    final lock = DbOperationLock.instance;
+    lock.suspendNewWork();
+    await controller.pauseAll();
+    final drained = await controller.drainInFlight();
+    if (!drained) {
+      AnxLog.severe('StorageMigration: in-flight writes still running; abort');
+      if (mounted) {
+        setState(() => _isMigrating = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(L10n.of(context).storageMigrationFailed),
+            backgroundColor: Theme.of(context).colorScheme.error,
+          ),
+        );
+      }
+      lock.resumeNewWork();
+      if (!wasPaused) await controller.resumeAll();
+      return;
+    }
+
+    final sourcePath = _currentStoragePath!;
+    final targetPath = _selectedNewPath!;
+    var success = false;
+    final oldCustomPath = Prefs().customStoragePath;
+    var recovered = false;
+    try {
+      await DbOperationLock.instance.runLocked(
+        DbOperationScope.migration,
+        () async {
+          DBHelper.inMaintenance = true;
+          PaperDatabase.instance.inMaintenance = true;
+          try {
+            success = await migrateStorageStores(
+              sourcePath: sourcePath,
+              destinationPath: targetPath,
+              closeStores: () async {
+                try {
+                  await PaperDatabase.instance.close();
+                } finally {
+                  await DBHelper.close();
+                }
+              },
+              publishPath: (path) async {
+                Prefs().customStoragePath =
+                    path == sourcePath ? oldCustomPath : path;
+                await initBasePath();
+              },
+              verifyStores: _reopenStores,
+              onProgress: (item, progress, total) {
+                if (mounted) {
+                  setState(() {
+                    _migrationCurrentItem = item;
+                    _migrationProgress = progress;
+                    _migrationTotal = total;
+                  });
+                }
+              },
+            );
+            recovered = true;
+          } finally {
+            if (recovered) {
+              DBHelper.inMaintenance = false;
+              PaperDatabase.instance.inMaintenance = false;
+            }
+          }
+        },
+      );
+    } catch (error) {
+      AnxLog.severe(
+          'StorageMigration: stores unavailable; collection remains paused: $error');
+    } finally {
+      if (recovered) {
+        lock.resumeNewWork();
+        if (!wasPaused) await controller.resumeAll();
+      }
+    }
 
     if (mounted) {
       setState(() {
@@ -128,7 +206,6 @@ class _StorageSettingsState extends ConsumerState<StorageSettings>
       });
 
       if (success) {
-        Prefs().customStoragePath = _selectedNewPath;
         setState(() {
           _currentStoragePath = _selectedNewPath;
           _selectedNewPath = null;
@@ -145,6 +222,21 @@ class _StorageSettingsState extends ConsumerState<StorageSettings>
             backgroundColor: Theme.of(context).colorScheme.error,
           ),
         );
+      }
+    }
+  }
+
+  Future<void> _reopenStores(String basePath) async {
+    final main = await DBHelper.reopen();
+    final papers = await PaperDatabase.instance.open();
+    for (final store in [main, papers]) {
+      if (!p.equals(p.normalize(store.path),
+          p.normalize(p.join(basePath, 'databases', p.basename(store.path))))) {
+        throw StateError('Reopened store points to an unexpected location');
+      }
+      final rows = await store.rawQuery('PRAGMA quick_check');
+      if (rows.length != 1 || rows.single.values.single != 'ok') {
+        throw StateError('Storage database integrity check failed');
       }
     }
   }

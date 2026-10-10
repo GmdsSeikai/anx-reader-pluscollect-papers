@@ -7,6 +7,7 @@ import 'package:anx_reader/main.dart';
 import 'package:anx_reader/models/ai_provider.dart';
 import 'package:anx_reader/providers/ai_providers.dart';
 import 'package:anx_reader/service/ai/ai_key_rotator.dart';
+import 'package:anx_reader/service/ai/ai_rpm_limiter.dart';
 import 'package:anx_reader/service/ai/langchain_ai_config.dart';
 import 'package:anx_reader/service/ai/langchain_registry.dart';
 import 'package:anx_reader/service/ai/langchain_runner.dart';
@@ -18,29 +19,9 @@ import 'package:langchain_core/prompts.dart';
 
 final CancelableLangchainRunner _runner = CancelableLangchainRunner();
 
-// Global request timestamps list for RPM throttling
-final List<DateTime> _aiRequestTimestamps = [];
-
-/// Throttle AI requests if RPM limit is configured (sliding 1-minute window).
-Future<void> _throttleIfNeeded() async {
-  final rpm = Prefs().aiRpm;
-  if (rpm <= 0) return;
-  final now = DateTime.now();
-  final windowStart = now.subtract(const Duration(minutes: 1));
-  _aiRequestTimestamps.removeWhere((ts) => ts.isBefore(windowStart));
-  if (_aiRequestTimestamps.length >= rpm) {
-    final oldest = _aiRequestTimestamps.first;
-    final waitUntil = oldest.add(const Duration(minutes: 1));
-    final waitDuration = waitUntil.difference(DateTime.now());
-    if (waitDuration > Duration.zero) {
-      await Future.delayed(waitDuration);
-    }
-    final newNow = DateTime.now();
-    _aiRequestTimestamps.removeWhere(
-        (ts) => ts.isBefore(newNow.subtract(const Duration(minutes: 1))));
-  }
-  _aiRequestTimestamps.add(DateTime.now());
-}
+/// Throttle AI requests through the shared RPM limiter so chat and
+/// paper analysis observe the same `Prefs().aiRpm` quota.
+Future<void> _throttleIfNeeded() => AiRpmLimiter.instance.reserve();
 
 Stream<String> aiGenerateStream(
   List<ChatMessage> messages, {

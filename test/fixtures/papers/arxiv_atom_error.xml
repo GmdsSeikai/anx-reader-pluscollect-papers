@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom" xmlns:opensearch="http://a9.com/-/spec/opensearch/1.1/">
+  <title>ArXiv Query: search_query=bad</title>
+  <id>http://arxiv.org/api/query?search_query=bad</id>
+  <updated>2026-01-02T00:00:00-05:00</updated>
+  <opensearch:totalResults>1</opensearch:totalResults>
+  <opensearch:startIndex>0</opensearch:startIndex>
+  <opensearch:itemsPerPage>1</opensearch:itemsPerPage>
+  <entry>
+    <title>Error</title>
+    <summary>malformed id_list parameter</summary>
+  </entry>
+</feed>

@@ -13,6 +13,7 @@ import 'package:anx_reader/providers/tb_groups.dart';
 import 'package:anx_reader/service/sync/sync_client_factory.dart';
 import 'package:anx_reader/service/sync/sync_client_base.dart';
 import 'package:anx_reader/service/database_sync_manager.dart';
+import 'package:anx_reader/service/db_operation_lock.dart';
 import 'package:anx_reader/dao/database.dart';
 import 'package:anx_reader/utils/get_path/databases_path.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
@@ -118,7 +119,7 @@ class Sync extends _$Sync {
       return false;
     }
     final context = navigatorKey.currentContext;
-    if (context != null) {
+    if (context != null && context.mounted) {
       AnxToast.show(L10n.of(context).syncEmptyLibraryUploadRejected);
     } else {
       AnxLog.info('Rejected upload: local library has no non-deleted books');
@@ -268,11 +269,41 @@ class Sync extends _$Sync {
     );
   }
 
+  /// Fuller fingerprint of the local main library: DB/WAL file modification
+  /// (same identity the direction logic uses), book count, latest update
+  /// time and the schema-updated flag. File mtime covers note/reading
+  /// writes and whole-library swaps that leave counts and maxima equal.
+  /// Returns null when the state cannot be read — callers must treat null
+  /// as "cannot verify" and stop before replacing the library.
+  Future<String?> _localLibrarySnapshot() async {
+    try {
+      final books = await bookDao.selectBooks();
+      var maxUpdate = '';
+      for (final book in books) {
+        final t = book.updateTime.toIso8601String();
+        if (t.compareTo(maxUpdate) > 0) maxUpdate = t;
+      }
+      final databasePath = await getAnxDataBasesPath();
+      final dbPath = join(databasePath, 'app_database.db');
+      final fileIdentity = DBHelper.getLatestModTime(dbPath)
+          .microsecondsSinceEpoch
+          .toString();
+      final dbSize = io.File(dbPath).existsSync()
+          ? io.File(dbPath).lengthSync().toString()
+          : 'missing';
+      return '$fileIdentity|$dbSize|${books.length}|$maxUpdate|${DBHelper.updatedDB}';
+    } catch (e) {
+      AnxLog.warning('Sync: local snapshot failed: $e');
+      return null;
+    }
+  }
+
   Future<void> syncData(
     SyncDirection direction,
     WidgetRef? ref, {
     SyncTrigger trigger = SyncTrigger.auto,
   }) async {
+    if (!DbOperationLock.instance.acceptsNewWork) return;
     final client = _syncClient;
     if (client == null) {
       AnxLog.info('No sync client configured');
@@ -304,6 +335,12 @@ class Sync extends _$Sync {
 
     AnxLog.info('Sync ping success');
 
+    // Snapshot the local library BEFORE the direction decision so the
+    // whole preparation window (decision reads, direction dialog, waiting
+    // for the lock) is covered. A change anywhere in that window makes the
+    // decision stale and must be re-checked before replacing the library.
+    final decisionSnapshot = await _localLibrarySnapshot();
+
     // Determine sync direction
     SyncDirection? finalDirection = await determineSyncDirection(direction);
     if (finalDirection == null) {
@@ -317,19 +354,51 @@ class Sync extends _$Sync {
     }
 
     try {
-      await syncDatabase(finalDirection);
+      // Preparation (ping, direction decision) happened without the lock.
+      // From here the local library can be replaced, so the scoped
+      // library-operation lock is held through the database swap and file
+      // sync — `isSyncing` alone leaves a check-then-write gap.
+      await DbOperationLock.instance.runLocked(DbOperationScope.sync, () async {
+        // Re-validate inside the lock. Unverifiable state (null) stops the
+        // replacement: a stale download decision must never overwrite a
+        // library that changed while we waited.
+        final current = await _localLibrarySnapshot();
+        if (current == null) {
+          AnxLog.severe(
+              'Sync: cannot verify local library state; aborting replacement');
+          return;
+        }
+        SyncDirection effectiveDirection = finalDirection;
+        if (current != decisionSnapshot) {
+          AnxLog.info(
+              'Sync: local library changed while preparing; '
+              're-determining direction');
+          final redetermined = await determineSyncDirection(direction);
+          if (redetermined == null) {
+            return; // safe abort; nothing was replaced
+          }
+          effectiveDirection = redetermined;
+        }
+
+        await syncDatabase(effectiveDirection);
+
+        if (await isCurrentEmpty()) {
+          await _showSyncAbortedDialog();
+          return;
+        }
+
+        if (Prefs().syncCompletedToast) {
+          AnxToast.show(
+              L10n.of(navigatorKey.currentContext!).webdavSyncingFiles);
+        }
+
+        await syncFiles();
+      });
 
       if (await isCurrentEmpty()) {
-        await _showSyncAbortedDialog();
         changeState(state.copyWith(isSyncing: false));
         return;
       }
-
-      if (Prefs().syncCompletedToast) {
-        AnxToast.show(L10n.of(navigatorKey.currentContext!).webdavSyncingFiles);
-      }
-
-      await syncFiles();
 
       imageCache.clear();
       imageCache.clearLiveImages();

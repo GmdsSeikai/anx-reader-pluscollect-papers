@@ -53,6 +53,13 @@ const String _prefsBackupEntryValueKey = 'value';
 const Set<String> _prefsImportSkipKeys = {
   'iapPurchaseStatus',
   'iapLastCheckTime',
+  // The Semantic Scholar key is machine-local credential material and is
+  // excluded from both settings export and import.
+  'semanticScholarApiKey',
+};
+
+const Set<String> _prefsExportSkipKeys = {
+  'semanticScholarApiKey',
 };
 
 class Prefs extends ChangeNotifier {
@@ -124,6 +131,9 @@ class Prefs extends ChangeNotifier {
       prefsBackupVersionKey: prefsBackupSchemaVersion,
     };
     for (final String key in prefs.getKeys()) {
+      if (_prefsExportSkipKeys.contains(key)) {
+        continue;
+      }
       final Object? value = prefs.get(key);
       final Map<String, Object?>? encoded = encodePrefsBackupEntry(value);
       if (encoded != null) {
@@ -541,12 +551,12 @@ class Prefs extends ChangeNotifier {
 
   FontModel get font {
     String? fontJson = prefs.getString('font');
-    BuildContext context = navigatorKey.currentContext!;
-    if (fontJson == null) {
-      return FontModel(
-          label: L10n.of(context).followBook, name: 'book', path: 'book');
-    }
-    return FontModel.fromJson(fontJson);
+    if (fontJson != null) return FontModel.fromJson(fontJson);
+    final context = navigatorKey.currentContext;
+    return FontModel(
+        label: context == null ? 'Follow book' : L10n.of(context).followBook,
+        name: 'book',
+        path: 'book');
   }
 
   set trueDarkMode(bool status) {
@@ -671,6 +681,17 @@ class Prefs extends ChangeNotifier {
       return legacy;
     }
     return prefs.getInt('aiRpm') ?? 0;
+  }
+
+  /// Optional Semantic Scholar API key. Stored only on this machine and
+  /// excluded from settings export/import; the UI shows it masked.
+  set semanticScholarApiKey(String key) {
+    prefs.setString('semanticScholarApiKey', key.trim());
+    notifyListeners();
+  }
+
+  String get semanticScholarApiKey {
+    return prefs.getString('semanticScholarApiKey') ?? '';
   }
 
   // set convertChineseMode(ConvertChineseMode mode) {

@@ -1,0 +1,27 @@
+[
+  {
+    "paperId": "s2-normal",
+    "title": "Deep Mutual Knowledge Distillation",
+    "externalIds": {"ArXiv": "2309.02719", "DOI": "10.1000/test.doi"},
+    "citationCount": 42
+  },
+  null,
+  {
+    "paperId": "s2-zero",
+    "title": "Zero Cited Paper",
+    "externalIds": {"ArXiv": "1111.1111"},
+    "citationCount": 0
+  },
+  {
+    "paperId": "s2-mismatch",
+    "title": "Wrong Identity",
+    "externalIds": {"ArXiv": "9999.99999"},
+    "citationCount": 7
+  },
+  {
+    "paperId": "s2-nullcount",
+    "title": "Null Count",
+    "externalIds": {"ArXiv": "2222.22222"},
+    "citationCount": null
+  }
+]
