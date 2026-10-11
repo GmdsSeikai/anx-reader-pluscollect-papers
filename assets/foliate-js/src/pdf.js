@@ -493,32 +493,33 @@ const annotationLayerBuilderCSS = `
 }
 `
 
-const renderPage = async (page, getImageBlob) => {
-
-    const naturalPdfSize = page.getViewport({ scale: 1 })
-    const naturalPdfRatio = naturalPdfSize.width / naturalPdfSize.height
-    const appRatio = innerWidth / innerHeight
-    const pdfToAppResolutionRatio = appRatio / naturalPdfRatio
-
-    const scale = devicePixelRatio * pdfToAppResolutionRatio
+const renderImage = async (page, scale, state) => {
     const viewport = page.getViewport({ scale })
-
     const canvas = document.createElement('canvas')
-    canvas.height = viewport.height
-    canvas.width = viewport.width
+    canvas.height = Math.ceil(viewport.height)
+    canvas.width = Math.ceil(viewport.width)
     const canvasContext = canvas.getContext('2d')
-    await page.render({ canvasContext, viewport }).promise
-    const blob = await new Promise(resolve => canvas.toBlob(resolve))
-    if (getImageBlob) return blob
+    const task = page.render({ canvasContext, viewport })
+    if (state) state.task = task
+    try {
+        await task.promise
+        const blob = await new Promise(resolve => canvas.toBlob(resolve))
+        if (!blob) throw new Error('PDF image encoding failed')
+        return blob
+    } finally {
+        if (state?.task === task) state.task = null
+        canvas.width = canvas.height = 0
+    }
+}
 
-    /*
-    // with the SVG backend
-    const operatorList = await page.getOperatorList()
-    const svgGraphics = new pdfjsLib.SVGGraphics(page.commonObjs, page.objs)
-    const svg = await svgGraphics.getSVG(operatorList, viewport)
-    const str = new XMLSerializer().serializeToString(svg)
-    const blob = new Blob([str], { type: 'image/svg+xml' })
-    */
+const renderPage = async page => {
+    // Keep the document, text and annotations in PDF coordinates. Only the
+    // image resolution changes when the fixed-layout viewport is scaled.
+    const scale = 1
+    const viewport = page.getViewport({ scale })
+    const imageScale = Math.min(innerWidth / viewport.width, innerHeight / viewport.height)
+        * devicePixelRatio
+    const blob = await renderImage(page, imageScale)
 
     const container = document.createElement('div')
     container.classList.add('textLayer')
@@ -549,14 +550,16 @@ const renderPage = async (page, getImageBlob) => {
             margin: 0;
             padding: 0;
         }
+        img { width: ${viewport.width}px; height: ${viewport.height}px; display: block; }
         ${textLayerBuilderCSS}
         ${annotationLayerBuilderCSS}
         </style>
-        <img src="${src}">
+        <meta name="viewport" content="width=${viewport.width},height=${viewport.height}">
+        <img src="${src}" data-render-scale="${imageScale}">
         ${container.outerHTML}
         ${div.outerHTML}
     `], { type: 'text/html' }))
-    return url
+    return { url, src }
 }
 
 const makeTOCItem = item => ({
@@ -569,7 +572,7 @@ export const makePDF = async file => {
     const data = new Uint8Array(await file.arrayBuffer())
     const pdf = await pdfjsLib.getDocument({ data }).promise
 
-    const book = { rendition: { layout: 'pre-paginated' } }
+    const book = { isPdf: true, rendition: { layout: 'pre-paginated' } }
 
     const info = (await pdf.getMetadata())?.info
     book.metadata = {
@@ -581,15 +584,85 @@ export const makePDF = async file => {
     book.toc = outline?.map(makeTOCItem)
 
     const cache = new Map()
+    const pending = new Map()
+    const renders = new Map()
+    let destroyed = false
+    const releaseRender = doc => {
+        const state = renders.get(doc)
+        if (!state) return
+        ++state.version
+        clearTimeout(state.timer)
+        state.task?.cancel()
+        if (state.url) URL.revokeObjectURL(state.url)
+        renders.delete(doc)
+    }
+    const render = (index, doc, displayScale) => {
+        if (destroyed || !doc?.defaultView?.frameElement?.isConnected) return
+        const image = doc.querySelector('img')
+        if (!image) return
+        const scale = displayScale * devicePixelRatio
+        let state = renders.get(doc)
+        if (!state) {
+            state = { version: 0, scale: Number(image.dataset.renderScale), url: null }
+            renders.set(doc, state)
+        }
+        if (Math.abs(scale - state.scale) < .01) return
+        state.scale = scale
+        const version = ++state.version
+        clearTimeout(state.timer)
+        state.task?.cancel()
+        state.timer = setTimeout(async () => {
+            let url
+            try {
+                const page = await pdf.getPage(index + 1)
+                if (state.version !== version || renders.get(doc) !== state) return
+                const blob = await renderImage(page, scale, state)
+                if (state.version !== version || renders.get(doc) !== state) return
+                url = URL.createObjectURL(blob)
+                // Decode before replacing the image so a failure retains the old one.
+                await new Promise((resolve, reject) => {
+                    const next = new Image()
+                    next.onload = resolve
+                    next.onerror = reject
+                    next.src = url
+                })
+                if (state.version !== version || renders.get(doc) !== state) {
+                    URL.revokeObjectURL(url)
+                    return
+                }
+                const previous = state.url
+                image.src = url
+                image.dataset.renderScale = scale
+                state.url = url
+                if (previous) URL.revokeObjectURL(previous)
+            } catch (error) {
+                if (url) URL.revokeObjectURL(url)
+                if (state.version === version && renders.get(doc) === state) {
+                    state.scale = Number(image.dataset.renderScale)
+                    if (error?.name !== 'RenderingCancelledException') console.warn(error)
+                }
+            }
+        }, 100)
+    }
     book.sections = Array.from({ length: pdf.numPages }).map((_, i) => ({
         id: i,
         load: async () => {
             const cached = cache.get(i)
-            if (cached) return cached
-            const url = await renderPage(await pdf.getPage(i + 1))
-            cache.set(i, url)
-            return url
+            if (cached) return cached.url
+            if (!pending.has(i)) pending.set(i, (async () => {
+                const result = await renderPage(await pdf.getPage(i + 1))
+                if (destroyed) {
+                    URL.revokeObjectURL(result.url)
+                    URL.revokeObjectURL(result.src)
+                    return null
+                }
+                cache.set(i, result)
+                return result.url
+            })().finally(() => pending.delete(i)))
+            return pending.get(i)
         },
+        render: (doc, scale) => render(i, doc, scale),
+        releaseRender,
         size: 1000,
     }))
     book.sections[0].pageSpread = 'right'
@@ -611,6 +684,16 @@ export const makePDF = async file => {
         return [index, null]
     }
     book.getTOCFragment = doc => doc.documentElement
-    book.getCover = async () => renderPage(await pdf.getPage(1), true)
+    book.getCover = async () => renderImage(await pdf.getPage(1), devicePixelRatio)
+    book.destroy = () => {
+        destroyed = true
+        for (const doc of renders.keys()) releaseRender(doc)
+        for (const { url, src } of cache.values()) {
+            URL.revokeObjectURL(url)
+            URL.revokeObjectURL(src)
+        }
+        cache.clear()
+        pdf.destroy()
+    }
     return book
 }

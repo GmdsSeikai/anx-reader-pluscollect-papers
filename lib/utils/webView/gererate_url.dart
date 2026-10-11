@@ -96,6 +96,7 @@ String generateUrl(
     'useBookStyles': Prefs().useBookStyles,
     'headingFontSize': bookStyle.headingFontSize,
     'codeHighlightTheme': Prefs().codeHighlightTheme.code,
+    'keyboardShortcutTurnPage': Prefs().keyboardShortcutTurnPage,
   };
 
   Map<String, dynamic> readingRules = {

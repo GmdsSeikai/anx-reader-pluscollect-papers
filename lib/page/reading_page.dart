@@ -13,6 +13,7 @@ import 'package:anx_reader/main.dart';
 import 'package:anx_reader/utils/platform_utils.dart';
 import 'package:anx_reader/models/ai_quick_prompt_chip.dart';
 import 'package:anx_reader/models/book.dart';
+import 'package:anx_reader/models/pdf_zoom_state.dart';
 import 'package:anx_reader/models/read_theme.dart';
 import 'package:anx_reader/page/book_detail.dart';
 import 'package:anx_reader/page/book_player/epub_player.dart';
@@ -25,6 +26,7 @@ import 'package:anx_reader/utils/ui/status_bar.dart';
 import 'package:anx_reader/widgets/ai/ai_chat_stream.dart';
 import 'package:anx_reader/widgets/ai/ai_stream.dart';
 import 'package:anx_reader/widgets/reading_page/notes_widget.dart';
+import 'package:anx_reader/widgets/reading_page/pdf_zoom_controls.dart';
 import 'package:anx_reader/models/reading_time.dart';
 import 'package:anx_reader/widgets/reading_page/progress_widget.dart';
 import 'package:anx_reader/widgets/reading_page/tts_fab.dart';
@@ -84,6 +86,7 @@ class ReadingPageState extends ConsumerState<ReadingPage>
   late double _aiChatHeight;
   bool _isResizingAiChat = false;
   bool bookmarkExists = false;
+  PdfZoomState _pdfZoom = const PdfZoomState();
 
   late final FocusNode _readerFocusNode;
   // late final VolumeKeyBoard _volumeKeyBoard;
@@ -113,6 +116,8 @@ class ReadingPageState extends ConsumerState<ReadingPage>
     setAwakeTimer(Prefs().awakeTime);
 
     _book = widget.book;
+    _pdfZoom =
+        PdfZoomState(isPdf: _book.filePath.toLowerCase().endsWith('.pdf'));
     heroTag = widget.heroTag ?? 'preventHeroWhenStart';
     // _volumeKeyBoard = VolumeKeyBoard.instance;
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -226,6 +231,9 @@ class ReadingPageState extends ConsumerState<ReadingPage>
     if (_isEditingText()) return false;
     // When Flutter still has focus, the Focus widget handles keys.
     if (_readerFocusNode.hasFocus) return false;
+    if (_pdfZoom.isPdf && HardwareKeyboard.instance.isControlPressed) {
+      return false;
+    }
     if (event is! KeyDownEvent) return false;
     final result =
         _handleReaderKeyEvent(_readerFocusNode, event, requireFocus: false);
@@ -243,6 +251,7 @@ class ReadingPageState extends ConsumerState<ReadingPage>
     }
 
     final logicalKey = event.logicalKey;
+    if (_handlePdfZoomKey(event)) return KeyEventResult.handled;
 
     if (logicalKey == LogicalKeyboardKey.arrowRight ||
         logicalKey == LogicalKeyboardKey.arrowDown ||
@@ -301,6 +310,42 @@ class ReadingPageState extends ConsumerState<ReadingPage>
 
     return KeyEventResult.ignored;
   }
+
+  bool _handlePdfZoomKey(KeyEvent event) {
+    if (!_pdfZoom.isPdf ||
+        event is! KeyDownEvent ||
+        _isEditingText() ||
+        !HardwareKeyboard.instance.isControlPressed ||
+        HardwareKeyboard.instance.isAltPressed ||
+        HardwareKeyboard.instance.isMetaPressed) {
+      return false;
+    }
+    final key = event.logicalKey;
+    final action = key == LogicalKeyboardKey.equal ||
+            key == LogicalKeyboardKey.add ||
+            key == LogicalKeyboardKey.numpadAdd
+        ? 'in'
+        : key == LogicalKeyboardKey.minus ||
+                key == LogicalKeyboardKey.numpadSubtract
+            ? 'out'
+            : key == LogicalKeyboardKey.digit0 ||
+                    key == LogicalKeyboardKey.numpad0
+                ? 'reset'
+                : null;
+    if (action == null) return false;
+    epubPlayerKey.currentState?.zoomPdf(action, fromKeyboard: true);
+    return true;
+  }
+
+  Widget _pdfZoomControls() => Focus(
+        onKeyEvent: (_, event) => _handlePdfZoomKey(event)
+            ? KeyEventResult.handled
+            : KeyEventResult.ignored,
+        child: PdfZoomControls(
+          state: _pdfZoom,
+          onZoom: (action) => epubPlayerKey.currentState?.zoomPdf(action),
+        ),
+      );
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
@@ -768,6 +813,9 @@ class ReadingPageState extends ConsumerState<ReadingPage>
                     },
                   ),
                   actions: [
+                    if (_pdfZoom.isPdf &&
+                        MediaQuery.sizeOf(context).width >= 800)
+                      _pdfZoomControls(),
                     if (EnvVar.enableAIFeature) aiButton,
                     IconButton(
                       icon: const Icon(Icons.copy),
@@ -817,6 +865,14 @@ class ReadingPageState extends ConsumerState<ReadingPage>
                     ),
                   ],
                 ),
+                if (_pdfZoom.isPdf && MediaQuery.sizeOf(context).width < 800)
+                  Material(
+                    color: Theme.of(context).colorScheme.surface,
+                    child: SizedBox(
+                      width: double.infinity,
+                      child: Center(child: _pdfZoomControls()),
+                    ),
+                  ),
                 const Spacer(),
                 BottomSheet(
                   onClosing: () {},
@@ -939,6 +995,11 @@ class ReadingPageState extends ConsumerState<ReadingPage>
                                   showOrHideAppBarAndBottomBar:
                                       showOrHideAppBarAndBottomBar,
                                   onLoadEnd: onLoadEnd,
+                                  onPdfZoomState: (state) {
+                                    if (mounted) {
+                                      setState(() => _pdfZoom = state);
+                                    }
+                                  },
                                   initialThemes: widget.initialThemes,
                                   updateParent: updateState,
                                 ),

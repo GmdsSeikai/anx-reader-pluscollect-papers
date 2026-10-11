@@ -88,8 +88,8 @@
         return;
       }
 
-      await loadScript('./dist/bundle.js', { type: 'module' });
       await loadScript('./dist/pdf-legacy.js', { async: false, defer: false });
+      await loadScript('./dist/bundle.js', { type: 'module' });
     })();
   })();
 </script>

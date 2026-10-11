@@ -798,6 +798,7 @@ const isFBZ = ({ name, type }) =>
   || name.endsWith('.fb2.zip') || name.endsWith('.fbz')
 
 const getView = async file => {
+  isPdf = false
   let book
   if (file.isDirectory) {
     const loader = await makeDirectoryLoader(file)
@@ -1293,12 +1294,23 @@ class Reader {
     this.view.addEventListener('doctouchstart', this.#onTouchStart.bind(this))
     this.view.addEventListener('doctouchmove', this.#onTouchMove.bind(this))
     this.view.addEventListener('doctouchend', this.#onTouchEnd.bind(this))
+    if (isPdf) {
+      this.view.renderer.addEventListener('zoom-change', event =>
+        callFlutter('onPdfZoomState', event.detail))
+      this.view.renderer.addEventListener('viewport-change', () => {
+        for (const { doc, index } of this.view.renderer.getContents()) {
+          if (getSelectionRange(doc.getSelection())) handleSelection(this.view, doc, index)
+        }
+      })
+    }
+    callFlutter('onPdfZoomState', { isPdf, ready: false, percent: 100 })
 
     setStyle()
-    if (!cfi)
+    if (!cfi && !isPdf)
       this.view.renderer.next()
     this.setView(this.view)
     await this.view.init({ lastLocation: cfi })
+    callFlutter('onPdfZoomState', { isPdf, ready: true, percent: 100 })
 
     // set html bg color to grey 
     document.documentElement.style.backgroundColor = 'grey'
@@ -1487,6 +1499,7 @@ class Reader {
     this.#doc = doc
     this.#index = index
     setSelectionHandler(this.view, doc, index)
+    if (isPdf) doc.addEventListener('keydown', pdfZoomKey)
 
     // if (!this.#originalContent) {
     // console.log('Saving original content', doc);
@@ -1584,6 +1597,7 @@ class Reader {
   }
 
   readingFeatures = () => {
+    if (this.view.book.isPdf) return
     this.#restoreOriginalContent()
     readingFeaturesDocHandler(this.#doc)
   }
@@ -1874,6 +1888,8 @@ const setStyle = (oldStyle) => {
   }
 
   reader.view.renderer.setAttribute('flow', turn.scroll ? 'scrolled' : 'paginated')
+  reader.view.renderer.setAttribute('keyboard-shortcut-turn-page',
+    style.keyboardShortcutTurnPage ? 'true' : 'false')
   reader.view.renderer.setAttribute('top-margin', `${style.topMargin}px`)
   reader.view.renderer.setAttribute('bottom-margin', `${style.bottomMargin}px`)
   reader.view.renderer.setAttribute('gap', `${style.sideMargin}%`)
@@ -2014,6 +2030,36 @@ window.goToPercent = percent => reader.view.goToFraction(percent)
 window.nextPage = () => reader.view.next()
 
 window.prevPage = () => reader.view.prev()
+
+const isEditing = target => target?.closest?.('input, textarea, select, [contenteditable]:not([contenteditable="false"])')
+
+window.pdfZoom = (action, point, fromKeyboard = false) => {
+  const renderer = globalThis.reader?.view?.renderer
+  if (!isPdf || !renderer?.ready) return
+  if (fromKeyboard) {
+    const active = document.activeElement
+    if (isEditing(active) || renderer.getContents().some(({ doc }) => isEditing(doc.activeElement))) return
+  }
+  if (action === 'togglePan') {
+    renderer.setPanMode(!renderer.panMode)
+    return
+  }
+  const zoom = action === 'reset' ? 1
+    : renderer.zoom + (action === 'in' ? .25 : action === 'out' ? -.25 : 0)
+  renderer.setZoom(zoom, point)
+}
+
+const pdfZoomKey = event => {
+  if (!isPdf || !event.ctrlKey || event.altKey || event.metaKey || isEditing(event.target)) return
+  const action = ['+', '='].includes(event.key) ? 'in'
+    : event.key === '-' ? 'out' : event.key === '0' ? 'reset' : null
+  if (!action) return
+  event.preventDefault()
+  event.stopPropagation()
+  window.pdfZoom(action)
+}
+document.addEventListener('keydown', pdfZoomKey)
+window.addEventListener('pagehide', () => globalThis.reader?.view?.close())
 
 window.setScroll = () => {
   style.scroll = true

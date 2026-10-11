@@ -12,6 +12,7 @@ import 'package:anx_reader/enums/writing_mode.dart';
 import 'package:anx_reader/l10n/generated/L10n.dart';
 import 'package:anx_reader/main.dart';
 import 'package:anx_reader/models/book.dart';
+import 'package:anx_reader/models/pdf_zoom_state.dart';
 import 'package:anx_reader/models/book_style.dart';
 import 'package:anx_reader/models/bookmark.dart';
 import 'package:anx_reader/models/font_model.dart';
@@ -65,6 +66,7 @@ class EpubPlayer extends ConsumerStatefulWidget {
   final Function onLoadEnd;
   final List<ReadTheme> initialThemes;
   final Function updateParent;
+  final ValueChanged<PdfZoomState>? onPdfZoomState;
 
   const EpubPlayer(
       {super.key,
@@ -73,6 +75,7 @@ class EpubPlayer extends ConsumerStatefulWidget {
       this.cfi,
       required this.onLoadEnd,
       required this.initialThemes,
+      this.onPdfZoomState,
       required this.updateParent});
 
   @override
@@ -105,6 +108,13 @@ class EpubPlayerState extends ConsumerState<EpubPlayer>
   String? _lastSelectionContextText;
   bool _selectionClearLocked = false;
   bool _selectionClearPending = false;
+  PdfZoomState pdfZoomState = const PdfZoomState();
+
+  void zoomPdf(String action, {bool fromKeyboard = false}) {
+    if (!pdfZoomState.isPdf || !pdfZoomState.ready) return;
+    webViewController
+        .execute('window.pdfZoom(${jsonEncode(action)}, null, $fromKeyboard);');
+  }
 
   // Scroll wheel debounce
   Timer? _scrollDebounceTimer;
@@ -656,6 +666,16 @@ class EpubPlayerState extends ConsumerState<EpubPlayer>
 
   Future<void> setHandler(EpubWebViewController controller) async {
     controller.addJavaScriptHandler(
+        handlerName: 'onPdfZoomState',
+        callback: (args) {
+          if (!mounted) return;
+          pdfZoomState =
+              PdfZoomState.fromMap(Map<String, dynamic>.from(args[0] as Map));
+          _scrollDebounceTimer?.cancel();
+          _accumulatedScrollDelta = 0;
+          widget.onPdfZoomState?.call(pdfZoomState);
+        });
+    controller.addJavaScriptHandler(
         handlerName: 'onLoadEnd',
         callback: (args) {
           widget.onLoadEnd();
@@ -934,6 +954,8 @@ class EpubPlayerState extends ConsumerState<EpubPlayer>
   }
 
   Future<void> _handlePointerEvents(PointerEvent event) async {
+    // PDF wheel gestures belong to the document, including Ctrl+wheel.
+    if (pdfZoomState.isPdf) return;
     if (await isFootNoteOpen() || Prefs().pageTurnStyle == PageTurn.scroll) {
       return;
     }

@@ -76,6 +76,7 @@ export class View extends HTMLElement {
   history = new History()
   #lastCfi = null
   #translator = new Translator()
+  #closed = false
   constructor() {
     super()
     this.history.addEventListener('popstate', ({ detail }) => {
@@ -140,6 +141,8 @@ export class View extends HTMLElement {
     }
   }
   close() {
+    if (this.#closed) return
+    this.#closed = true
     this.renderer?.destroy()
     this.renderer?.remove()
     this.#sectionProgress = null
@@ -328,13 +331,9 @@ export class View extends HTMLElement {
       
       // if the position is not null, it is fixed layout
       if (position) {
-        clientX *= scale
-        clientY *= scale
-
-        const docWidth = doc.documentElement.getBoundingClientRect().width * scale
-        if (position === 'right' && docWidth * 2.2 < window.innerWidth) {
-          clientX += window.innerWidth * 0.5
-        }
+        const rect = doc.defaultView.frameElement.getBoundingClientRect()
+        clientX = rect.left + clientX * scale
+        clientY = rect.top + clientY * scale
         this.#emit('click-view', { x: clientX, y: clientY })
         return
       }

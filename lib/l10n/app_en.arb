@@ -1060,5 +1060,10 @@
   "papersAuthorsLabel": "Authors",
   "papersCategoriesLabel": "Categories",
   "papersSourceLinks": "Source links",
-  "papersVersionNote": "A newer version exists on arXiv. The bookshelf copy is unchanged."
+  "papersVersionNote": "A newer version exists on arXiv. The bookshelf copy is unchanged.",
+  "pdfZoomOut": "Zoom out (Ctrl+-)",
+  "pdfZoomIn": "Zoom in (Ctrl++)",
+  "pdfZoomReset": "Reset to fit (Ctrl+0)",
+  "pdfDragPage": "Drag page (hold the left mouse button)",
+  "pdfSelectText": "Switch to text selection"
 }
